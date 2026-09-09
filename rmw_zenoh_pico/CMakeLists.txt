@@ -22,12 +22,37 @@ project(rmw_zenoh_pico
     C
 )
 
-find_package(ament_cmake_ros REQUIRED)
+find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_ros_core REQUIRED)
+
+# ament_target_dependencies() was removed in newer ament_cmake (e.g. rolling).
+# Minimal drop-in replacement using the classic *_INCLUDE_DIRS/_LIBRARIES/_DEFINITIONS vars.
+if(NOT COMMAND ament_target_dependencies)
+  macro(ament_target_dependencies _target)
+    foreach(_dep ${ARGN})
+      if(DEFINED ${_dep}_INCLUDE_DIRS)
+        target_include_directories(${_target} PUBLIC ${${_dep}_INCLUDE_DIRS})
+      endif()
+      if(DEFINED ${_dep}_LIBRARIES)
+        target_link_libraries(${_target} ${${_dep}_LIBRARIES})
+      endif()
+      if(DEFINED ${_dep}_DEFINITIONS)
+        target_compile_definitions(${_target} PUBLIC ${${_dep}_DEFINITIONS})
+      endif()
+    endforeach()
+  endmacro()
+endif()
 find_package(rosidl_runtime_c REQUIRED)
 find_package(rcutils REQUIRED)
 find_package(rmw REQUIRED)
 find_package(microcdr REQUIRED)
 find_package(zenohpico REQUIRED)
+
+if(EMSCRIPTEN)
+  # zenoh-pico gates its own emscripten platform code on this define; the
+  # ament_target_dependencies() shim above doesn't propagate it, so set it directly.
+  add_definitions(-DZENOH_EMSCRIPTEN)
+endif()
 
 # Build options
 option(BUILD_DOCUMENTATION              "Use doxygen to create product documentation" OFF)
