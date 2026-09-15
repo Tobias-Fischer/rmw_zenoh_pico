@@ -187,17 +187,26 @@ rmw_wait(rmw_subscriptions_t * subscriptions,
   }
 
   if(events) {
+    // This used to be a nested `for` loop shadowing its own index
+    // variable (a copy-paste duplicate of the identical loop header),
+    // whose body ended with `return true;` even though rmw_wait()
+    // returns `rmw_ret_t`, not `bool` -- `true` is 1, which is
+    // RMW_RET_ERROR here, so the very first ready event made the whole
+    // call fail with an unhelpful "Error from rmw_wait(): 1 error not
+    // set" (no message ever set to go with that code). Matches the
+    // subscriptions/services/clients loops just below: record readiness
+    // in `wait_result` and null out an entry rcl should treat as not
+    // ready, instead of returning early.
     for (size_t i = 0; i < events->event_count; ++i) {
-      for (size_t i = 0; i < events->event_count; ++i) {
-	DataEventManager *event_mgr = (DataEventManager *)events->events[i];
-	if (event_mgr == NULL) {
-	  continue;
-	}
+      DataEventManager *event_mgr = (DataEventManager *)events->events[i];
+      if (event_mgr == NULL) {
+	continue;
+      }
 
-	if(event_condition_detach_and_queue_is_empty(event_mgr)) {
-	  // RMW_ZENOH_LOG_INFO("found attach event");
-	  return true;
-	}
+      if(event_condition_detach_and_queue_is_empty(event_mgr)) {
+	events->events[i] = NULL;
+      }else{
+	wait_result = true;
       }
     }
   }
