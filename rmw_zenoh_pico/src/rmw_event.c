@@ -447,6 +447,29 @@ rmw_take_event(const rmw_event_t * event_handle,
     "Publisher implementation identifier not from this implementation",
     return RMW_RET_INCORRECT_RMW_IMPLEMENTATION);
 
+  // event_condition_check() (used by rmw_wait() to decide whether a
+  // wait-set entry is "ready") checks whether *any* of this shared
+  // DataEventManager's event types changed, not specifically the one
+  // `event_handle` represents here -- a publisher/subscription with more
+  // than one registered rmw_event_t (e.g. a default incompatible-QoS
+  // handler alongside a real MATCHED status change) had every sibling
+  // handle spuriously reported "ready" whenever *any* of them changed.
+  // This function used to compound that by never checking its own
+  // type's `changed` flag either, so a spurious wakeup for -- say --
+  // OFFERED_QOS_INCOMPATIBLE would still unconditionally report
+  // total_count=0/last_policy_kind=RMW_QOS_POLICY_INVALID with
+  // *taken=true, firing the caller's incompatible-QoS callback for an
+  // incident that never happened. Gate on this event's own `changed`
+  // flag first: a genuine change still reports normally below (and the
+  // switch cases each clear `changed` once taken); nothing to report
+  // otherwise -- standard rmw_take_event() semantics.
+  z_mutex_lock(z_loan_mut(event_mgr->mutex));
+  bool has_changed = st->changed;
+  z_mutex_unlock(z_loan_mut(event_mgr->mutex));
+  if (!has_changed) {
+    return RMW_RET_OK;
+  }
+
   switch (event_type) {
   case RMW_EVENT_REQUESTED_QOS_INCOMPATIBLE:
   {
