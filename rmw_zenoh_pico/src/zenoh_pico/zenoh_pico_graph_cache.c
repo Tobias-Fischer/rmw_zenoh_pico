@@ -215,6 +215,22 @@ static void update_match_events(ZenohPicoGraphLocalEntity *local,
   }
 }
 
+// rmw_service_server_is_available() only cares about existence, not QoS
+// compatibility -- unlike update_match_events() (Publisher<->Subscription),
+// there's no MATCHED/INCOMPATIBLE event pair here, just a live count of
+// currently-discovered matching services. Clamped at 0: a DELETE for a
+// service this client never actually saw a matching PUT for (e.g. it
+// existed before this client's own liveliness subscriber was declared, and
+// this session never got the "history" PUT replay for some reason) must
+// never take the count negative.
+static void update_client_availability(ZenohPicoServiceData *client_data, bool is_put)
+{
+  client_data->available_services += is_put ? 1 : -1;
+  if (client_data->available_services < 0) {
+    client_data->available_services = 0;
+  }
+}
+
 static void graph_cache_process_sample(ZenohPicoSession *session,
 					const char *key_str, size_t key_len,
 					bool is_put)
@@ -229,8 +245,14 @@ static void graph_cache_process_sample(ZenohPicoSession *session,
   char *segments[MIN_TOPIC_ENTITY_SEGMENTS];
   size_t segment_count = split_segments(buf, segments, MIN_TOPIC_ENTITY_SEGMENTS);
   if (segment_count < MIN_TOPIC_ENTITY_SEGMENTS) {
-    // Not a topic-bearing entity (a plain node, or a service/client, whose
-    // liveliness key has fewer segments) -- nothing to match here.
+    // Not a topic-bearing entity -- a plain node's liveliness key has no
+    // topic_info segments at all (generate_liveliness() only appends them
+    // `if (entity->topic_info != NULL)`, which a plain Node never has).
+    // Service and Client entities DO carry topic_info (the service name/
+    // type, same as a topic) and so reach the entity_type dispatch below
+    // just like Publisher/Subscription -- confirmed via
+    // zenoh_pico_generate_service_entity()'s own call to
+    // zenoh_pico_generate_topic_info().
     return;
   }
   if (strcmp(segments[0], ADMIN_SPACE_PREFIX) != 0) {
@@ -243,8 +265,13 @@ static void graph_cache_process_sample(ZenohPicoSession *session,
     remote_type = Publisher;
   } else if (strcmp(entity_type, "MS") == 0) {
     remote_type = Subscription;
+  } else if (strcmp(entity_type, "SS") == 0) {
+    remote_type = Service;
   } else {
-    // A service/client/node liveliness token -- also not matched here.
+    // A client/node liveliness token -- also not matched here. Nothing
+    // currently needs a service or client to discover remote *clients*
+    // (only rmw_service_server_is_available(), client-side only, needs
+    // this at all), so "SC" is deliberately left unhandled, same as "NN".
     return;
   }
 
@@ -258,12 +285,16 @@ static void graph_cache_process_sample(ZenohPicoSession *session,
 
   for (ZenohPicoGraphLocalEntity *local = session->graph_local_entities;
        local != NULL; local = local->next) {
-    // Only Publisher<->Subscription pairs can ever match -- a local
-    // publisher only cares about remote subscriptions, and vice versa.
-    bool complementary =
+    // Publisher<->Subscription and Client<->Service are the only pairs
+    // that can ever match -- a local publisher only cares about remote
+    // subscriptions (and vice versa), and a local client only cares about
+    // remote services (nothing currently needs the reverse).
+    bool pubsub_pair =
       (local->type == Publisher && remote_type == Subscription) ||
       (local->type == Subscription && remote_type == Publisher);
-    if (!complementary) {
+    bool client_service_pair =
+      local->type == Client && remote_type == Service;
+    if (!pubsub_pair && !client_service_pair) {
       continue;
     }
 
@@ -278,7 +309,11 @@ static void graph_cache_process_sample(ZenohPicoSession *session,
       continue;
     }
 
-    update_match_events(local, &remote_qos, is_put);
+    if (client_service_pair) {
+      update_client_availability((ZenohPicoServiceData *)local->owner, is_put);
+    } else {
+      update_match_events(local, &remote_qos, is_put);
+    }
   }
 
   z_mutex_unlock(z_loan_mut(session->graph_lock));

@@ -29,34 +29,41 @@ extern "C"
 {
 #endif  // if defined(__cplusplus)
 
-  // One local publisher or subscription, registered with its session's graph
-  // cache so the session-wide liveliness discovery subscriber can find it
-  // when a same-topic remote peer is discovered (or lost), and update its
-  // MATCHED / QOS_INCOMPATIBLE event counters accordingly. Owns none of the
-  // pointed-to data -- topic_name/topic_type/qos/event_mgr all live inside
-  // the ZenohPicoPubData/ZenohPicoSubData this entry was registered for, and
-  // must outlive it (guaranteed: unregistered in the same
-  // rmw_destroy_publisher()/rmw_destroy_subscription() call that frees it).
+  // One local publisher, subscription, or client, registered with its
+  // session's graph cache so the session-wide liveliness discovery
+  // subscriber can find it when a same-topic remote peer is discovered (or
+  // lost). For a Publisher/Subscription this updates its MATCHED /
+  // QOS_INCOMPATIBLE event counters; for a Client (matched against a
+  // remote Service) it updates the owning ZenohPicoServiceData's
+  // available_services count instead (backing
+  // rmw_service_server_is_available()) -- qos/event_mgr are unused in that
+  // case, just kept non-NULL for a uniform registration call. Owns none of
+  // the pointed-to data -- topic_name/topic_type/qos/event_mgr all live
+  // inside the ZenohPicoPubData/ZenohPicoSubData/ZenohPicoServiceData this
+  // entry was registered for, and must outlive it (guaranteed:
+  // unregistered in the same rmw_destroy_publisher()/
+  // rmw_destroy_subscription()/rmw_destroy_client() call that frees it).
   typedef struct _ZenohPicoGraphLocalEntity
   {
     struct _ZenohPicoGraphLocalEntity *next;
 
-    ZenohPicoEntityType type;  // Publisher or Subscription -- nothing else is registered here
+    ZenohPicoEntityType type;  // Publisher, Subscription, or Client
     const z_loaned_string_t *topic_name;
     const z_loaned_string_t *topic_type;
     rmw_qos_profile_t *qos;
     DataEventManager *event_mgr;
 
     // Opaque identity used only to find this entry again on unregister --
-    // always the owning ZenohPicoPubData*/ZenohPicoSubData*, never
-    // dereferenced here.
+    // always the owning ZenohPicoPubData*/ZenohPicoSubData*/
+    // ZenohPicoServiceData*, never dereferenced here.
     void *owner;
   } ZenohPicoGraphLocalEntity;
 
-  // Registers a local publisher or subscription so remote liveliness
-  // discovery can match against it. Safe to call multiple times per session
-  // (once per local entity) -- the session-wide liveliness subscriber itself
-  // is only actually declared once, on the first registration.
+  // Registers a local publisher, subscription, or client so remote
+  // liveliness discovery can match against it. Safe to call multiple times
+  // per session (once per local entity) -- the session-wide liveliness
+  // subscriber itself is only actually declared once, on the first
+  // registration.
   extern bool graph_cache_register_local(
     ZenohPicoSession *session,
     ZenohPicoEntityType type,
